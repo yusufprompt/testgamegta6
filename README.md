@@ -17,8 +17,9 @@ Open http://localhost:5173 and use WASD or arrow keys to move the red box.
 
 1. Create a new empty GitHub repository.
 2. Push this project to the `main` branch.
-3. In GitHub: `Settings -> Pages -> Build and deployment -> Source`, select `GitHub Actions`.
-4. After push, workflow `.github/workflows/deploy-gh-pages.yml` deploys automatically.
+3. In GitHub: `Settings -> Pages -> Build and deployment -> Source`, select `Deploy from a branch`.
+4. Branch: `gh-pages`, Folder: `/(root)`.
+5. After push, workflow `.github/workflows/deploy-gh-pages.yml` deploys automatically.
 
 Site URL format:
 
