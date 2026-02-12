@@ -113,11 +113,19 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   )
   const [remotePlayers, setRemotePlayers] = useState<RemotePlayer[]>([])
   const [cars, setCars] = useState<NetCarState[]>(DEFAULT_CARS)
+  const [firebaseError, setFirebaseError] = useState<string | null>(null)
   const lastSentRef = useRef(0)
   const lastCarSentRef = useRef<Record<string, number>>({})
   const safeName = localState.name.trim() ? localState.name.trim().slice(0, 16) : 'Guest'
+  const toErr = (label: string, err: unknown) => {
+    if (typeof err === 'object' && err && 'message' in err && typeof err.message === 'string') {
+      return `${label}: ${err.message}`
+    }
+    return `${label}: bilinmeyen hata`
+  }
 
   useEffect(() => {
+    setFirebaseError(null)
     for (const car of DEFAULT_CARS) {
       const carRef = doc(db, 'rooms', roomId, 'cars', car.id)
       void setDoc(
@@ -127,63 +135,71 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
           updatedAt: serverTimestamp(),
         },
         { merge: true }
-      )
+      ).catch((err) => setFirebaseError(toErr('Cars init', err)))
     }
   }, [roomId])
 
   useEffect(() => {
     const playersCol = collection(db, 'rooms', roomId, 'players')
-    const unsub = onSnapshot(playersCol, (snap) => {
-      const now = Date.now()
-      const next: RemotePlayer[] = []
+    const unsub = onSnapshot(
+      playersCol,
+      (snap) => {
+        const now = Date.now()
+        const next: RemotePlayer[] = []
 
-      snap.forEach((item) => {
-        if (item.id === clientId) return
-        const raw = item.data() as Partial<NetPlayerState> & { updatedAt?: Timestamp }
-        const updatedAtMs = raw.updatedAt?.toMillis?.() ?? 0
-        if (updatedAtMs > 0 && now - updatedAtMs > STALE_MS) return
-        if (typeof raw.x !== 'number' || typeof raw.z !== 'number' || typeof raw.yaw !== 'number') return
+        snap.forEach((item) => {
+          if (item.id === clientId) return
+          const raw = item.data() as Partial<NetPlayerState> & { updatedAt?: Timestamp }
+          const updatedAtMs = raw.updatedAt?.toMillis?.() ?? 0
+          if (updatedAtMs > 0 && now - updatedAtMs > STALE_MS) return
+          if (typeof raw.x !== 'number' || typeof raw.z !== 'number' || typeof raw.yaw !== 'number') return
 
-        next.push({
-          id: item.id,
-          name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.slice(0, 16) : 'Guest',
-          x: raw.x,
-          z: raw.z,
-          yaw: raw.yaw,
-          health: typeof raw.health === 'number' ? raw.health : 100,
-          wanted: typeof raw.wanted === 'number' ? raw.wanted : 0,
-          ammo: typeof raw.ammo === 'number' ? raw.ammo : 0,
-          inCar: !!raw.inCar,
+          next.push({
+            id: item.id,
+            name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.slice(0, 16) : 'Guest',
+            x: raw.x,
+            z: raw.z,
+            yaw: raw.yaw,
+            health: typeof raw.health === 'number' ? raw.health : 100,
+            wanted: typeof raw.wanted === 'number' ? raw.wanted : 0,
+            ammo: typeof raw.ammo === 'number' ? raw.ammo : 0,
+            inCar: !!raw.inCar,
+          })
         })
-      })
 
-      setRemotePlayers(next)
-    })
+        setRemotePlayers(next)
+      },
+      (err) => setFirebaseError(toErr('Players listener', err))
+    )
 
     return () => unsub()
   }, [clientId, roomId])
 
   useEffect(() => {
     const carsCol = collection(db, 'rooms', roomId, 'cars')
-    const unsub = onSnapshot(carsCol, (snap) => {
-      const byId = new Map<string, NetCarState>()
-      for (const baseCar of DEFAULT_CARS) byId.set(baseCar.id, baseCar)
+    const unsub = onSnapshot(
+      carsCol,
+      (snap) => {
+        const byId = new Map<string, NetCarState>()
+        for (const baseCar of DEFAULT_CARS) byId.set(baseCar.id, baseCar)
 
-      snap.forEach((item) => {
-        const raw = item.data() as Partial<NetCarState>
-        const prev = byId.get(item.id)
-        if (!prev) return
-        byId.set(item.id, {
-          ...prev,
-          ...raw,
-          id: item.id,
-          driverId: typeof raw.driverId === 'string' ? raw.driverId : null,
-          driverName: typeof raw.driverName === 'string' ? raw.driverName : null,
+        snap.forEach((item) => {
+          const raw = item.data() as Partial<NetCarState>
+          const prev = byId.get(item.id)
+          if (!prev) return
+          byId.set(item.id, {
+            ...prev,
+            ...raw,
+            id: item.id,
+            driverId: typeof raw.driverId === 'string' ? raw.driverId : null,
+            driverName: typeof raw.driverName === 'string' ? raw.driverName : null,
+          })
         })
-      })
 
-      setCars(Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id)))
-    })
+        setCars(Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id)))
+      },
+      (err) => setFirebaseError(toErr('Cars listener', err))
+    )
 
     return () => unsub()
   }, [roomId])
@@ -202,14 +218,14 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
         updatedAt: serverTimestamp(),
       },
       { merge: true }
-    )
+    ).catch((err) => setFirebaseError(toErr('Player write', err)))
   }, [clientId, localState, roomId, safeName])
 
   useEffect(() => {
     const playerRef = doc(db, 'rooms', roomId, 'players', clientId)
 
     const clean = () => {
-      void deleteDoc(playerRef)
+      void deleteDoc(playerRef).catch(() => {})
     }
 
     window.addEventListener('beforeunload', clean)
@@ -220,46 +236,56 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   }, [clientId, roomId])
 
   const tryEnterCar = async (carId: string) => {
-    const carRef = doc(db, 'rooms', roomId, 'cars', carId)
-    return runTransaction(db, async (tx) => {
-      const snap = await tx.get(carRef)
-      const raw = snap.exists() ? (snap.data() as Partial<NetCarState> & { updatedAt?: Timestamp }) : undefined
-      const updatedAtMs = raw?.updatedAt?.toMillis?.() ?? 0
-      const occupiedByOther =
-        !!raw?.driverId && raw.driverId !== clientId && (updatedAtMs === 0 || Date.now() - updatedAtMs < STALE_MS)
-      if (occupiedByOther) return false
+    try {
+      const carRef = doc(db, 'rooms', roomId, 'cars', carId)
+      return runTransaction(db, async (tx) => {
+        const snap = await tx.get(carRef)
+        const raw = snap.exists() ? (snap.data() as Partial<NetCarState> & { updatedAt?: Timestamp }) : undefined
+        const updatedAtMs = raw?.updatedAt?.toMillis?.() ?? 0
+        const occupiedByOther =
+          !!raw?.driverId && raw.driverId !== clientId && (updatedAtMs === 0 || Date.now() - updatedAtMs < STALE_MS)
+        if (occupiedByOther) return false
 
-      tx.set(
-        carRef,
-        {
-          driverId: clientId,
-          driverName: safeName,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      )
-      return true
-    })
+        tx.set(
+          carRef,
+          {
+            driverId: clientId,
+            driverName: safeName,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        )
+        return true
+      })
+    } catch (err) {
+      setFirebaseError(toErr('Try enter car', err))
+      return false
+    }
   }
 
   const leaveCar = async (carId: string, patch?: Partial<NetCarState>) => {
-    const carRef = doc(db, 'rooms', roomId, 'cars', carId)
-    return runTransaction(db, async (tx) => {
-      const snap = await tx.get(carRef)
-      const raw = snap.exists() ? (snap.data() as Partial<NetCarState>) : undefined
-      if (raw?.driverId && raw.driverId !== clientId) return false
-      tx.set(
-        carRef,
-        {
-          ...patch,
-          driverId: null,
-          driverName: null,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      )
-      return true
-    })
+    try {
+      const carRef = doc(db, 'rooms', roomId, 'cars', carId)
+      return runTransaction(db, async (tx) => {
+        const snap = await tx.get(carRef)
+        const raw = snap.exists() ? (snap.data() as Partial<NetCarState>) : undefined
+        if (raw?.driverId && raw.driverId !== clientId) return false
+        tx.set(
+          carRef,
+          {
+            ...patch,
+            driverId: null,
+            driverName: null,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        )
+        return true
+      })
+    } catch (err) {
+      setFirebaseError(toErr('Leave car', err))
+      return false
+    }
   }
 
   const pushCarState = (carId: string, patch: Partial<NetCarState>) => {
@@ -278,8 +304,8 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
         updatedAt: serverTimestamp(),
       },
       { merge: true }
-    )
+    ).catch((err) => setFirebaseError(toErr('Car write', err)))
   }
 
-  return { clientId, remotePlayers, cars, tryEnterCar, leaveCar, pushCarState }
+  return { clientId, remotePlayers, cars, tryEnterCar, leaveCar, pushCarState, firebaseError }
 }

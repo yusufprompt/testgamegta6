@@ -59,6 +59,17 @@ canvas {
   font-size: 11px;
   letter-spacing: 1px;
   color: #dbe6f1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-room-line.ok {
+  color: #8ad66b;
+}
+
+.hud-room-line.err {
+  color: #ff8a8a;
 }
 
 .hud-room-row {

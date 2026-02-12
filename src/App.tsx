@@ -32,7 +32,7 @@ export default function App() {
     const fromHash = hash.startsWith('#room=') ? hash.slice(6) : ''
     return normalizeRoomCode(fromHash)
   })
-  const { remotePlayers, cars, tryEnterCar, leaveCar, pushCarState } = useFirebaseMultiplayer({
+  const { remotePlayers, cars, tryEnterCar, leaveCar, pushCarState, firebaseError } = useFirebaseMultiplayer({
     name: playerName,
     ...playerState,
     inCar,
@@ -85,6 +85,7 @@ export default function App() {
         onCreateRoom={() => setRoomCode(randomRoomCode())}
         playerName={playerName}
         onChangePlayerName={(nextName) => setPlayerName(nextName.slice(0, 16))}
+        firebaseError={firebaseError}
       />
       <MobileControls />
     </>

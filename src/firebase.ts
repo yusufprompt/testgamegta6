@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app'
-import { getFirestore } from 'firebase/firestore'
+import { initializeFirestore } from 'firebase/firestore'
 
 const firebaseConfig = {
   apiKey: 'AIzaSyCBox8JZAcGI98_GdJmenU-jyXZgzxznx0',
@@ -13,4 +13,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig)
 
-export const db = getFirestore(app)
+// Improves Firestore reliability on restrictive networks/browsers.
+export const db = initializeFirestore(app, {
+  experimentalAutoDetectLongPolling: true,
+})

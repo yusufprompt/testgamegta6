@@ -12,6 +12,7 @@ type Props = {
   onCreateRoom: () => void
   playerName: string
   onChangePlayerName: (name: string) => void
+  firebaseError?: string | null
 }
 
 export default function Overlay({
@@ -26,6 +27,7 @@ export default function Overlay({
   onCreateRoom,
   playerName,
   onChangePlayerName,
+  firebaseError,
 }: Props) {
   const mapSize = 160
   const mapScale = 6 // world units to map pixels (bigger world -> scale)
@@ -107,6 +109,9 @@ export default function Overlay({
           <div className="hud-room">
             <div className="hud-room-line">ROOM {roomCode}</div>
             <div className="hud-room-line">{remoteCount + 1} oyuncu</div>
+            <div className={`hud-room-line ${firebaseError ? 'err' : 'ok'}`}>
+              {firebaseError ? `Firebase: ${firebaseError}` : 'Firebase: bagli'}
+            </div>
             <div className="hud-room-row">
               <input
                 className="hud-room-input"
