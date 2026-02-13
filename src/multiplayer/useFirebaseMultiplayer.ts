@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  addDoc,
   collection,
   deleteDoc,
   doc,
-  limit,
   onSnapshot,
-  orderBy,
-  query,
   runTransaction,
   serverTimestamp,
   setDoc,
@@ -55,11 +51,12 @@ export type ChatMessage = {
 }
 
 const STALE_MS = 15000
-const PLAYER_SYNC_MIN_MS = 700
-const PLAYER_HEARTBEAT_MS = 5000
-const CAR_SYNC_MIN_MS = 220
-const CAR_HEARTBEAT_MS = 1500
-const CHAT_LISTEN_LIMIT = 60
+const PLAYER_SYNC_MIN_MS = 1200
+const PLAYER_HEARTBEAT_MS = 10000
+const CAR_SYNC_MIN_MS = 450
+const CAR_HEARTBEAT_MS = 3000
+const CHAT_MAX_MESSAGES = 40
+const QUOTA_RETRY_MS = 60000
 const DEFAULT_CARS: NetCarState[] = [
   {
     id: 'car-1',
@@ -137,6 +134,7 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   const lastPlayerPayloadRef = useRef<NetPlayerState | null>(null)
   const lastCarPayloadRef = useRef<Record<string, Partial<NetCarState>>>({})
   const quotaBlockedRef = useRef(false)
+  const quotaUnblockTimerRef = useRef<number | null>(null)
   const safeName = localState.name.trim() ? localState.name.trim().slice(0, 16) : 'Guest'
   const toErr = (label: string, err: unknown) => {
     if (typeof err === 'object' && err && 'message' in err && typeof err.message === 'string') {
@@ -154,6 +152,13 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     if (isQuotaError(err)) {
       quotaBlockedRef.current = true
       setFirebaseError(`${label}: Quota exceeded (Spark limit)`)
+      if (quotaUnblockTimerRef.current === null) {
+        quotaUnblockTimerRef.current = window.setTimeout(() => {
+          quotaBlockedRef.current = false
+          quotaUnblockTimerRef.current = null
+          setFirebaseError((prev) => (prev && prev.includes('Quota exceeded') ? null : prev))
+        }, QUOTA_RETRY_MS)
+      }
       return
     }
     setFirebaseError(toErr(label, err))
@@ -169,6 +174,17 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     lastCarSentRef.current = {}
     lastPlayerPayloadRef.current = null
     lastCarPayloadRef.current = {}
+    if (quotaUnblockTimerRef.current !== null) {
+      window.clearTimeout(quotaUnblockTimerRef.current)
+      quotaUnblockTimerRef.current = null
+    }
+
+    return () => {
+      if (quotaUnblockTimerRef.current !== null) {
+        window.clearTimeout(quotaUnblockTimerRef.current)
+        quotaUnblockTimerRef.current = null
+      }
+    }
   }, [roomId])
 
   useEffect(() => {
@@ -237,29 +253,26 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   }, [roomId])
 
   useEffect(() => {
-    const chatQuery = query(collection(db, 'rooms', roomId, 'cars'), limit(CHAT_LISTEN_LIMIT))
+    const chatRef = doc(db, 'rooms', roomId, 'cars', 'chat-feed')
     const unsub = onSnapshot(
-      chatQuery,
+      chatRef,
       (snap) => {
+        const data = snap.data() as { messages?: unknown[] } | undefined
+        const source = Array.isArray(data?.messages) ? data!.messages : []
         const rows: ChatMessage[] = []
-        snap.forEach((item) => {
-          const raw = item.data() as {
-            kind?: string
-            senderId?: string
-            senderName?: string
-            text?: string
-            createdAt?: Timestamp
-          }
-          if (raw.kind !== 'chat') return
-          if (typeof raw.text !== 'string' || !raw.text.trim()) return
+
+        for (const item of source) {
+          const raw = item as Partial<ChatMessage>
+          if (typeof raw.text !== 'string' || !raw.text.trim()) continue
           rows.push({
-            id: item.id,
+            id: typeof raw.id === 'string' ? raw.id : `m-${Math.random().toString(36).slice(2, 10)}`,
             senderId: typeof raw.senderId === 'string' ? raw.senderId : '',
-            senderName: typeof raw.senderName === 'string' && raw.senderName.trim() ? raw.senderName.slice(0, 16) : 'Guest',
+            senderName:
+              typeof raw.senderName === 'string' && raw.senderName.trim() ? raw.senderName.slice(0, 16) : 'Guest',
             text: raw.text.slice(0, 180),
-            createdAtMs: raw.createdAt?.toMillis?.() ?? 0,
+            createdAtMs: typeof raw.createdAtMs === 'number' ? raw.createdAtMs : 0,
           })
-        })
+        }
         rows.sort((a, b) => a.createdAtMs - b.createdAtMs)
         setChatMessages(rows)
       },
@@ -411,13 +424,32 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     const clean = text.trim().slice(0, 180)
     if (!clean) return
     try {
-      const col = collection(db, 'rooms', roomId, 'cars')
-      await addDoc(col, {
-        kind: 'chat',
-        senderId: clientId,
-        senderName: safeName,
-        text: clean,
-        createdAt: serverTimestamp(),
+      const chatRef = doc(db, 'rooms', roomId, 'cars', 'chat-feed')
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(chatRef)
+        const data = snap.data() as { messages?: unknown[] } | undefined
+        const current = Array.isArray(data?.messages)
+          ? (data!.messages.filter((m) => typeof m === 'object' && !!m) as Array<Record<string, unknown>>)
+          : []
+
+        current.push({
+          id: `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          senderId: clientId,
+          senderName: safeName,
+          text: clean,
+          createdAtMs: Date.now(),
+        })
+
+        const next = current.slice(-CHAT_MAX_MESSAGES)
+        tx.set(
+          chatRef,
+          {
+            kind: 'chat_feed',
+            messages: next,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        )
       })
     } catch (err) {
       setWriteErr('Chat write', err)
