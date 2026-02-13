@@ -237,8 +237,8 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
         : query(
             collection(db, 'rooms', roomId, 'cars'),
             where('kind', '==', 'chat'),
-            orderBy('createdAt', 'desc'),
-            limit(30)
+            // Avoid composite index requirement on fallback path.
+            limit(200)
           )
     const unsub = onSnapshot(
       chatQuery,
