@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  addDoc,
   collection,
   deleteDoc,
   doc,
+  limit,
   onSnapshot,
+  orderBy,
+  query,
   runTransaction,
   serverTimestamp,
   setDoc,
@@ -40,6 +44,14 @@ export type NetCarState = {
   headlightsOn: boolean
   driverId: string | null
   driverName: string | null
+}
+
+export type ChatMessage = {
+  id: string
+  senderId: string
+  senderName: string
+  text: string
+  createdAtMs: number
 }
 
 const STALE_MS = 15000
@@ -113,6 +125,7 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   )
   const [remotePlayers, setRemotePlayers] = useState<RemotePlayer[]>([])
   const [cars, setCars] = useState<NetCarState[]>(DEFAULT_CARS)
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [firebaseError, setFirebaseError] = useState<string | null>(null)
   const lastSentRef = useRef(0)
   const lastCarSentRef = useRef<Record<string, number>>({})
@@ -125,17 +138,23 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   }
 
   useEffect(() => {
+    setRemotePlayers([])
+    setCars(DEFAULT_CARS)
+    setChatMessages([])
     setFirebaseError(null)
+  }, [roomId])
+
+  useEffect(() => {
     for (const car of DEFAULT_CARS) {
       const carRef = doc(db, 'rooms', roomId, 'cars', car.id)
-      void setDoc(
-        carRef,
-        {
+      void runTransaction(db, async (tx) => {
+        const snap = await tx.get(carRef)
+        if (snap.exists()) return
+        tx.set(carRef, {
           ...car,
           updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      ).catch((err) => setFirebaseError(toErr('Cars init', err)))
+        })
+      }).catch((err) => setFirebaseError(toErr('Cars init', err)))
     }
   }, [roomId])
 
@@ -199,6 +218,38 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
         setCars(Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id)))
       },
       (err) => setFirebaseError(toErr('Cars listener', err))
+    )
+
+    return () => unsub()
+  }, [roomId])
+
+  useEffect(() => {
+    const chatCol = collection(db, 'rooms', roomId, 'chat')
+    const chatQuery = query(chatCol, orderBy('createdAt', 'desc'), limit(30))
+    const unsub = onSnapshot(
+      chatQuery,
+      (snap) => {
+        const rows: ChatMessage[] = []
+        snap.forEach((item) => {
+          const raw = item.data() as {
+            senderId?: string
+            senderName?: string
+            text?: string
+            createdAt?: Timestamp
+          }
+          if (typeof raw.text !== 'string' || !raw.text.trim()) return
+          rows.push({
+            id: item.id,
+            senderId: typeof raw.senderId === 'string' ? raw.senderId : '',
+            senderName: typeof raw.senderName === 'string' && raw.senderName.trim() ? raw.senderName.slice(0, 16) : 'Guest',
+            text: raw.text.slice(0, 180),
+            createdAtMs: raw.createdAt?.toMillis?.() ?? 0,
+          })
+        })
+        rows.sort((a, b) => a.createdAtMs - b.createdAtMs)
+        setChatMessages(rows)
+      },
+      (err) => setFirebaseError(toErr('Chat listener', err))
     )
 
     return () => unsub()
@@ -307,5 +358,31 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     ).catch((err) => setFirebaseError(toErr('Car write', err)))
   }
 
-  return { clientId, remotePlayers, cars, tryEnterCar, leaveCar, pushCarState, firebaseError }
+  const sendChatMessage = async (text: string) => {
+    const clean = text.trim().slice(0, 180)
+    if (!clean) return
+    try {
+      const chatCol = collection(db, 'rooms', roomId, 'chat')
+      await addDoc(chatCol, {
+        senderId: clientId,
+        senderName: safeName,
+        text: clean,
+        createdAt: serverTimestamp(),
+      })
+    } catch (err) {
+      setFirebaseError(toErr('Chat write', err))
+    }
+  }
+
+  return {
+    clientId,
+    remotePlayers,
+    cars,
+    tryEnterCar,
+    leaveCar,
+    pushCarState,
+    chatMessages,
+    sendChatMessage,
+    firebaseError,
+  }
 }

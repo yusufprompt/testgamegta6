@@ -32,14 +32,22 @@ export default function App() {
     const fromHash = hash.startsWith('#room=') ? hash.slice(6) : ''
     return normalizeRoomCode(fromHash)
   })
-  const { remotePlayers, cars, tryEnterCar, leaveCar, pushCarState, firebaseError } = useFirebaseMultiplayer({
-    name: playerName,
-    ...playerState,
-    inCar,
-  }, roomCode)
+  const { remotePlayers, cars, tryEnterCar, leaveCar, pushCarState, chatMessages, sendChatMessage, firebaseError } =
+    useFirebaseMultiplayer(
+      {
+        name: playerName,
+        ...playerState,
+        inCar,
+      },
+      roomCode
+    )
 
   useEffect(() => {
     window.location.hash = `room=${roomCode}`
+  }, [roomCode])
+
+  useEffect(() => {
+    setInCar(false)
   }, [roomCode])
 
   useEffect(() => {
@@ -86,6 +94,8 @@ export default function App() {
         playerName={playerName}
         onChangePlayerName={(nextName) => setPlayerName(nextName.slice(0, 16))}
         firebaseError={firebaseError}
+        chatMessages={chatMessages}
+        onSendChat={sendChatMessage}
       />
       <MobileControls />
     </>

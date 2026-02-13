@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { ChatMessage } from '../multiplayer/useFirebaseMultiplayer'
 
 type Props = {
   view: 'third' | 'first'
@@ -13,6 +14,8 @@ type Props = {
   playerName: string
   onChangePlayerName: (name: string) => void
   firebaseError?: string | null
+  chatMessages: ChatMessage[]
+  onSendChat: (text: string) => Promise<void>
 }
 
 export default function Overlay({
@@ -28,6 +31,8 @@ export default function Overlay({
   playerName,
   onChangePlayerName,
   firebaseError,
+  chatMessages,
+  onSendChat,
 }: Props) {
   const mapSize = 160
   const mapScale = 6 // world units to map pixels (bigger world -> scale)
@@ -41,6 +46,7 @@ export default function Overlay({
   const [phoneApp, setPhoneApp] = useState<'apps' | 'code'>('apps')
   const [code, setCode] = useState('')
   const [roomInput, setRoomInput] = useState(roomCode)
+  const [chatInput, setChatInput] = useState('')
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<number | null>(null)
 
@@ -98,6 +104,12 @@ export default function Overlay({
     }
   }
 
+  const sendChat = async () => {
+    if (!chatInput.trim()) return
+    await onSendChat(chatInput)
+    setChatInput('')
+  }
+
   return (
     <div className="hud">
       {toast && <div className="hud-toast">{toast}</div>}
@@ -139,6 +151,35 @@ export default function Overlay({
               </button>
               <button className="hud-btn" onClick={copyRoom}>
                 Kopyala
+              </button>
+            </div>
+          </div>
+          <div className="hud-chat">
+            <div className="hud-chat-title">SOHBET</div>
+            <div className="hud-chat-list">
+              {chatMessages.length === 0 && <div className="hud-chat-empty">Mesaj yok</div>}
+              {chatMessages.slice(-8).map((m) => (
+                <div className="hud-chat-line" key={m.id}>
+                  <span className="name">{m.senderName}:</span> <span className="msg">{m.text}</span>
+                </div>
+              ))}
+            </div>
+            <div className="hud-chat-row">
+              <input
+                className="hud-chat-input"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void sendChat()
+                  }
+                }}
+                placeholder="Mesaj yaz..."
+                maxLength={180}
+              />
+              <button className="hud-btn" onClick={() => void sendChat()}>
+                Gonder
               </button>
             </div>
           </div>

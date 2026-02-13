@@ -91,6 +91,70 @@ canvas {
   box-sizing: border-box;
 }
 
+.hud-chat {
+  pointer-events: auto;
+  display: grid;
+  gap: 6px;
+  background: rgba(10, 14, 18, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 8px;
+  min-width: 260px;
+  max-width: 300px;
+}
+
+.hud-chat-title {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #cfe1f0;
+}
+
+.hud-chat-list {
+  background: rgba(3, 5, 8, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  min-height: 92px;
+  max-height: 140px;
+  overflow: auto;
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+}
+
+.hud-chat-line {
+  font-size: 11px;
+  line-height: 1.3;
+  color: #e8f0f8;
+  overflow-wrap: anywhere;
+}
+
+.hud-chat-line .name {
+  color: #8ad66b;
+}
+
+.hud-chat-empty {
+  font-size: 11px;
+  color: #9fb3c7;
+}
+
+.hud-chat-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+}
+
+.hud-chat-input {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(5, 8, 12, 0.65);
+  color: #f5f7fa;
+  border-radius: 4px;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+
 .hud-toast {
   position: absolute;
   top: 80px;
@@ -465,5 +529,10 @@ canvas {
 
   .hud-room {
     min-width: 180px;
+  }
+
+  .hud-chat {
+    min-width: 220px;
+    max-width: 240px;
   }
 }
