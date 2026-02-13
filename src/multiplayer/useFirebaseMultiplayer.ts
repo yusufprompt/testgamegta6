@@ -12,7 +12,6 @@ import {
   serverTimestamp,
   setDoc,
   Timestamp,
-  where,
 } from 'firebase/firestore'
 import { db } from '../firebase'
 
@@ -127,7 +126,6 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   const [remotePlayers, setRemotePlayers] = useState<RemotePlayer[]>([])
   const [cars, setCars] = useState<NetCarState[]>(DEFAULT_CARS)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
-  const [chatStorageMode, setChatStorageMode] = useState<'chatCollection' | 'carsCollection'>('carsCollection')
   const [firebaseError, setFirebaseError] = useState<string | null>(null)
   const lastSentRef = useRef(0)
   const lastCarSentRef = useRef<Record<string, number>>({})
@@ -138,16 +136,11 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     }
     return `${label}: bilinmeyen hata`
   }
-  const errCode = (err: unknown) => {
-    if (typeof err === 'object' && err && 'code' in err && typeof err.code === 'string') return err.code
-    return ''
-  }
 
   useEffect(() => {
     setRemotePlayers([])
     setCars(DEFAULT_CARS)
     setChatMessages([])
-    setChatStorageMode('carsCollection')
     setFirebaseError(null)
   }, [roomId])
 
@@ -231,26 +224,20 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   }, [roomId])
 
   useEffect(() => {
-    const chatQuery =
-      chatStorageMode === 'chatCollection'
-        ? query(collection(db, 'rooms', roomId, 'chat'), orderBy('createdAt', 'desc'), limit(30))
-        : query(
-            collection(db, 'rooms', roomId, 'cars'),
-            where('kind', '==', 'chat'),
-            // Avoid composite index requirement on fallback path.
-            limit(200)
-          )
+    const chatQuery = query(collection(db, 'rooms', roomId, 'cars'), limit(250))
     const unsub = onSnapshot(
       chatQuery,
       (snap) => {
         const rows: ChatMessage[] = []
         snap.forEach((item) => {
           const raw = item.data() as {
+            kind?: string
             senderId?: string
             senderName?: string
             text?: string
             createdAt?: Timestamp
           }
+          if (raw.kind !== 'chat') return
           if (typeof raw.text !== 'string' || !raw.text.trim()) return
           rows.push({
             id: item.id,
@@ -263,19 +250,11 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
         rows.sort((a, b) => a.createdAtMs - b.createdAtMs)
         setChatMessages(rows)
       },
-      (err) => {
-        const code = errCode(err)
-        if (chatStorageMode === 'chatCollection' && code === 'permission-denied') {
-          setChatStorageMode('carsCollection')
-          setFirebaseError('Chat: fallback aktif (chat kurali eksik)')
-          return
-        }
-        setFirebaseError(toErr('Chat listener', err))
-      }
+      (err) => setFirebaseError(toErr('Chat listener', err))
     )
 
     return () => unsub()
-  }, [chatStorageMode, roomId])
+  }, [roomId])
 
   useEffect(() => {
     const now = Date.now()
@@ -384,23 +363,15 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     const clean = text.trim().slice(0, 180)
     if (!clean) return
     try {
-      const col =
-        chatStorageMode === 'chatCollection'
-          ? collection(db, 'rooms', roomId, 'chat')
-          : collection(db, 'rooms', roomId, 'cars')
+      const col = collection(db, 'rooms', roomId, 'cars')
       await addDoc(col, {
-        ...(chatStorageMode === 'carsCollection' ? { kind: 'chat' } : {}),
+        kind: 'chat',
         senderId: clientId,
         senderName: safeName,
         text: clean,
         createdAt: serverTimestamp(),
       })
     } catch (err) {
-      const code = errCode(err)
-      if (chatStorageMode === 'chatCollection' && code === 'permission-denied') {
-        setChatStorageMode('carsCollection')
-        return
-      }
       setFirebaseError(toErr('Chat write', err))
     }
   }
