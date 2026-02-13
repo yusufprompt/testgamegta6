@@ -127,7 +127,7 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   const [remotePlayers, setRemotePlayers] = useState<RemotePlayer[]>([])
   const [cars, setCars] = useState<NetCarState[]>(DEFAULT_CARS)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
-  const [chatStorageMode, setChatStorageMode] = useState<'chatCollection' | 'carsCollection'>('chatCollection')
+  const [chatStorageMode, setChatStorageMode] = useState<'chatCollection' | 'carsCollection'>('carsCollection')
   const [firebaseError, setFirebaseError] = useState<string | null>(null)
   const lastSentRef = useRef(0)
   const lastCarSentRef = useRef<Record<string, number>>({})
@@ -147,7 +147,7 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     setRemotePlayers([])
     setCars(DEFAULT_CARS)
     setChatMessages([])
-    setChatStorageMode('chatCollection')
+    setChatStorageMode('carsCollection')
     setFirebaseError(null)
   }, [roomId])
 
