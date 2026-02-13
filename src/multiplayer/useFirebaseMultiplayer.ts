@@ -55,6 +55,11 @@ export type ChatMessage = {
 }
 
 const STALE_MS = 15000
+const PLAYER_SYNC_MIN_MS = 700
+const PLAYER_HEARTBEAT_MS = 5000
+const CAR_SYNC_MIN_MS = 220
+const CAR_HEARTBEAT_MS = 1500
+const CHAT_LISTEN_LIMIT = 60
 const DEFAULT_CARS: NetCarState[] = [
   {
     id: 'car-1',
@@ -129,6 +134,9 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   const [firebaseError, setFirebaseError] = useState<string | null>(null)
   const lastSentRef = useRef(0)
   const lastCarSentRef = useRef<Record<string, number>>({})
+  const lastPlayerPayloadRef = useRef<NetPlayerState | null>(null)
+  const lastCarPayloadRef = useRef<Record<string, Partial<NetCarState>>>({})
+  const quotaBlockedRef = useRef(false)
   const safeName = localState.name.trim() ? localState.name.trim().slice(0, 16) : 'Guest'
   const toErr = (label: string, err: unknown) => {
     if (typeof err === 'object' && err && 'message' in err && typeof err.message === 'string') {
@@ -136,26 +144,31 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     }
     return `${label}: bilinmeyen hata`
   }
+  const isQuotaError = (err: unknown) => {
+    if (typeof err !== 'object' || !err) return false
+    const maybeCode = 'code' in err && typeof err.code === 'string' ? err.code : ''
+    const maybeMsg = 'message' in err && typeof err.message === 'string' ? err.message.toLowerCase() : ''
+    return maybeCode === 'resource-exhausted' || maybeMsg.includes('quota exceeded')
+  }
+  const setWriteErr = (label: string, err: unknown) => {
+    if (isQuotaError(err)) {
+      quotaBlockedRef.current = true
+      setFirebaseError(`${label}: Quota exceeded (Spark limit)`)
+      return
+    }
+    setFirebaseError(toErr(label, err))
+  }
 
   useEffect(() => {
     setRemotePlayers([])
     setCars(DEFAULT_CARS)
     setChatMessages([])
     setFirebaseError(null)
-  }, [roomId])
-
-  useEffect(() => {
-    for (const car of DEFAULT_CARS) {
-      const carRef = doc(db, 'rooms', roomId, 'cars', car.id)
-      void runTransaction(db, async (tx) => {
-        const snap = await tx.get(carRef)
-        if (snap.exists()) return
-        tx.set(carRef, {
-          ...car,
-          updatedAt: serverTimestamp(),
-        })
-      }).catch((err) => setFirebaseError(toErr('Cars init', err)))
-    }
+    quotaBlockedRef.current = false
+    lastSentRef.current = 0
+    lastCarSentRef.current = {}
+    lastPlayerPayloadRef.current = null
+    lastCarPayloadRef.current = {}
   }, [roomId])
 
   useEffect(() => {
@@ -224,7 +237,7 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   }, [roomId])
 
   useEffect(() => {
-    const chatQuery = query(collection(db, 'rooms', roomId, 'cars'), limit(250))
+    const chatQuery = query(collection(db, 'rooms', roomId, 'cars'), limit(CHAT_LISTEN_LIMIT))
     const unsub = onSnapshot(
       chatQuery,
       (snap) => {
@@ -257,9 +270,22 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   }, [roomId])
 
   useEffect(() => {
+    if (quotaBlockedRef.current) return
     const now = Date.now()
-    if (now - lastSentRef.current < 90) return
-    lastSentRef.current = now
+    const prev = lastPlayerPayloadRef.current
+    const changed =
+      !prev ||
+      Math.abs(localState.x - prev.x) > 0.2 ||
+      Math.abs(localState.z - prev.z) > 0.2 ||
+      Math.abs(localState.yaw - prev.yaw) > 0.1 ||
+      localState.health !== prev.health ||
+      localState.wanted !== prev.wanted ||
+      localState.ammo !== prev.ammo ||
+      localState.inCar !== prev.inCar ||
+      safeName !== prev.name
+
+    const gap = changed ? PLAYER_SYNC_MIN_MS : PLAYER_HEARTBEAT_MS
+    if (now - lastSentRef.current < gap) return
 
     const playerRef = doc(db, 'rooms', roomId, 'players', clientId)
     void setDoc(
@@ -270,7 +296,12 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
         updatedAt: serverTimestamp(),
       },
       { merge: true }
-    ).catch((err) => setFirebaseError(toErr('Player write', err)))
+    )
+      .then(() => {
+        lastSentRef.current = now
+        lastPlayerPayloadRef.current = { ...localState, name: safeName }
+      })
+      .catch((err) => setWriteErr('Player write', err))
   }, [clientId, localState, roomId, safeName])
 
   useEffect(() => {
@@ -288,6 +319,7 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   }, [clientId, roomId])
 
   const tryEnterCar = async (carId: string) => {
+    if (quotaBlockedRef.current) return false
     try {
       const carRef = doc(db, 'rooms', roomId, 'cars', carId)
       return runTransaction(db, async (tx) => {
@@ -310,12 +342,13 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
         return true
       })
     } catch (err) {
-      setFirebaseError(toErr('Try enter car', err))
+      setWriteErr('Try enter car', err)
       return false
     }
   }
 
   const leaveCar = async (carId: string, patch?: Partial<NetCarState>) => {
+    if (quotaBlockedRef.current) return false
     try {
       const carRef = doc(db, 'rooms', roomId, 'cars', carId)
       return runTransaction(db, async (tx) => {
@@ -335,16 +368,30 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
         return true
       })
     } catch (err) {
-      setFirebaseError(toErr('Leave car', err))
+      setWriteErr('Leave car', err)
       return false
     }
   }
 
   const pushCarState = (carId: string, patch: Partial<NetCarState>) => {
+    if (quotaBlockedRef.current) return
     const now = Date.now()
     const lastSent = lastCarSentRef.current[carId] ?? 0
-    if (now - lastSent < 80) return
+    const prev = lastCarPayloadRef.current[carId]
+    const changed =
+      !prev ||
+      Math.abs((patch.x ?? 0) - (prev.x ?? 0)) > 0.2 ||
+      Math.abs((patch.z ?? 0) - (prev.z ?? 0)) > 0.2 ||
+      Math.abs((patch.yaw ?? 0) - (prev.yaw ?? 0)) > 0.1 ||
+      Math.abs((patch.speed ?? 0) - (prev.speed ?? 0)) > 0.8 ||
+      (patch.gear ?? 0) !== (prev.gear ?? 0) ||
+      !!patch.headlightsOn !== !!prev.headlightsOn
+
+    const minGap = changed ? CAR_SYNC_MIN_MS : CAR_HEARTBEAT_MS
+    if (now - lastSent < minGap) return
+
     lastCarSentRef.current[carId] = now
+    lastCarPayloadRef.current[carId] = { ...patch }
 
     const carRef = doc(db, 'rooms', roomId, 'cars', carId)
     void setDoc(
@@ -356,10 +403,11 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
         updatedAt: serverTimestamp(),
       },
       { merge: true }
-    ).catch((err) => setFirebaseError(toErr('Car write', err)))
+    ).catch((err) => setWriteErr('Car write', err))
   }
 
   const sendChatMessage = async (text: string) => {
+    if (quotaBlockedRef.current) return
     const clean = text.trim().slice(0, 180)
     if (!clean) return
     try {
@@ -372,7 +420,7 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
         createdAt: serverTimestamp(),
       })
     } catch (err) {
-      setFirebaseError(toErr('Chat write', err))
+      setWriteErr('Chat write', err)
     }
   }
 
