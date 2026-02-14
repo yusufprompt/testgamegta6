@@ -105,9 +105,9 @@ export default function Car({
       if (!remoteState) return
       remoteTargetPos.current.set(remoteState.x, remoteState.y ?? 0.75, remoteState.z)
       remoteTargetYaw.current = remoteState.yaw
-      ref.current.position.lerp(remoteTargetPos.current, 0.25)
+      ref.current.position.lerp(remoteTargetPos.current, 0.4)
       const diff = ((remoteTargetYaw.current - yaw.current + Math.PI * 3) % (Math.PI * 2)) - Math.PI
-      yaw.current += diff * 0.22
+      yaw.current += diff * 0.36
       ref.current.rotation.set(0, yaw.current, 0)
       return
     }

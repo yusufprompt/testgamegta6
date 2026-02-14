@@ -52,10 +52,12 @@ export type ChatMessage = {
 }
 
 const STALE_MS = 15000
-const PLAYER_SYNC_MIN_MS = 1200
-const PLAYER_HEARTBEAT_MS = 10000
-const CAR_SYNC_MIN_MS = 450
-const CAR_HEARTBEAT_MS = 3000
+const PLAYER_SYNC_FAST_MS = 140
+const PLAYER_SYNC_NORMAL_MS = 260
+const PLAYER_HEARTBEAT_MS = 2500
+const CAR_SYNC_FAST_MS = 90
+const CAR_SYNC_NORMAL_MS = 180
+const CAR_HEARTBEAT_MS = 1000
 const CHAT_MAX_MESSAGES = 40
 const QUOTA_RETRY_MS = 60000
 const DEFAULT_CARS: NetCarState[] = [
@@ -328,18 +330,25 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     if (quotaBlockedRef.current) return
     const now = Date.now()
     const prev = lastPlayerPayloadRef.current
+    const moveDist = prev ? Math.hypot(localState.x - prev.x, localState.z - prev.z) : 999
+    const yawDiff = prev
+      ? Math.abs((((localState.yaw - prev.yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI))
+      : Math.PI
     const changed =
       !prev ||
-      Math.abs(localState.x - prev.x) > 0.2 ||
-      Math.abs(localState.z - prev.z) > 0.2 ||
-      Math.abs(localState.yaw - prev.yaw) > 0.1 ||
+      moveDist > 0.08 ||
+      yawDiff > 0.06 ||
       localState.health !== prev.health ||
       localState.wanted !== prev.wanted ||
       localState.ammo !== prev.ammo ||
       localState.inCar !== prev.inCar ||
       safeName !== prev.name
 
-    const gap = changed ? PLAYER_SYNC_MIN_MS : PLAYER_HEARTBEAT_MS
+    const gap = !changed
+      ? PLAYER_HEARTBEAT_MS
+      : localState.inCar || moveDist > 0.7 || yawDiff > 0.3
+        ? PLAYER_SYNC_FAST_MS
+        : PLAYER_SYNC_NORMAL_MS
     if (now - lastSentRef.current < gap) return
 
     const playerRef = doc(db, 'rooms', roomId, 'players', clientId)
@@ -437,16 +446,24 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     const now = Date.now()
     const lastSent = lastCarSentRef.current[carId] ?? 0
     const prev = lastCarPayloadRef.current[carId]
+    const posMove = prev ? Math.hypot((patch.x ?? 0) - (prev.x ?? 0), (patch.z ?? 0) - (prev.z ?? 0)) : 999
+    const yawDiff = prev
+      ? Math.abs(((((patch.yaw ?? 0) - (prev.yaw ?? 0) + Math.PI * 3) % (Math.PI * 2)) - Math.PI))
+      : Math.PI
+    const speedAbs = Math.abs(patch.speed ?? 0)
     const changed =
       !prev ||
-      Math.abs((patch.x ?? 0) - (prev.x ?? 0)) > 0.2 ||
-      Math.abs((patch.z ?? 0) - (prev.z ?? 0)) > 0.2 ||
-      Math.abs((patch.yaw ?? 0) - (prev.yaw ?? 0)) > 0.1 ||
-      Math.abs((patch.speed ?? 0) - (prev.speed ?? 0)) > 0.8 ||
+      posMove > 0.1 ||
+      yawDiff > 0.08 ||
+      Math.abs((patch.speed ?? 0) - (prev.speed ?? 0)) > 0.5 ||
       (patch.gear ?? 0) !== (prev.gear ?? 0) ||
       !!patch.headlightsOn !== !!prev.headlightsOn
 
-    const minGap = changed ? CAR_SYNC_MIN_MS : CAR_HEARTBEAT_MS
+    const minGap = !changed
+      ? CAR_HEARTBEAT_MS
+      : speedAbs > 6 || posMove > 0.8 || yawDiff > 0.35
+        ? CAR_SYNC_FAST_MS
+        : CAR_SYNC_NORMAL_MS
     if (now - lastSent < minGap) return
 
     lastCarSentRef.current[carId] = now
