@@ -3,6 +3,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDocs,
   onSnapshot,
   runTransaction,
   serverTimestamp,
@@ -163,6 +164,43 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     }
     setFirebaseError(toErr(label, err))
   }
+  const maybeDeleteRoomIfEmpty = async (targetRoomId: string, assumeSelfRemoved: boolean) => {
+    try {
+      const playersCol = collection(db, 'rooms', targetRoomId, 'players')
+      const snap = await getDocs(playersCol)
+      const now = Date.now()
+      const staleRefs: Array<ReturnType<typeof doc>> = []
+      let liveCount = 0
+      let selfLive = false
+
+      snap.forEach((item) => {
+        const raw = item.data() as { updatedAt?: Timestamp }
+        const updatedAtMs = raw.updatedAt?.toMillis?.() ?? 0
+        const live = updatedAtMs > 0 && now - updatedAtMs < STALE_MS * 2
+        if (live) {
+          liveCount++
+          if (item.id === clientId) selfLive = true
+        } else {
+          staleRefs.push(item.ref)
+        }
+      })
+
+      if (staleRefs.length > 0) {
+        await Promise.allSettled(staleRefs.map((ref) => deleteDoc(ref)))
+      }
+
+      if (liveCount === 0 || (assumeSelfRemoved && liveCount === 1 && selfLive)) {
+        const ops = [
+          ...DEFAULT_CARS.map((car) => deleteDoc(doc(db, 'rooms', targetRoomId, 'cars', car.id))),
+          deleteDoc(doc(db, 'rooms', targetRoomId, 'cars', 'chat-feed')),
+          deleteDoc(doc(db, 'rooms', targetRoomId)),
+        ]
+        await Promise.allSettled(ops)
+      }
+    } catch {
+      // best-effort cleanup
+    }
+  }
 
   useEffect(() => {
     setRemotePlayers([])
@@ -185,6 +223,10 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
         quotaUnblockTimerRef.current = null
       }
     }
+  }, [roomId])
+
+  useEffect(() => {
+    void maybeDeleteRoomIfEmpty(roomId, false)
   }, [roomId])
 
   useEffect(() => {
@@ -224,32 +266,32 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   }, [clientId, roomId])
 
   useEffect(() => {
-    const carsCol = collection(db, 'rooms', roomId, 'cars')
-    const unsub = onSnapshot(
-      carsCol,
-      (snap) => {
-        const byId = new Map<string, NetCarState>()
-        for (const baseCar of DEFAULT_CARS) byId.set(baseCar.id, baseCar)
-
-        snap.forEach((item) => {
-          const raw = item.data() as Partial<NetCarState>
-          const prev = byId.get(item.id)
-          if (!prev) return
-          byId.set(item.id, {
-            ...prev,
-            ...raw,
-            id: item.id,
-            driverId: typeof raw.driverId === 'string' ? raw.driverId : null,
-            driverName: typeof raw.driverName === 'string' ? raw.driverName : null,
+    const unsubs = DEFAULT_CARS.map((baseCar) => {
+      const carRef = doc(db, 'rooms', roomId, 'cars', baseCar.id)
+      return onSnapshot(
+        carRef,
+        (snap) => {
+          const raw = (snap.data() || {}) as Partial<NetCarState>
+          setCars((prev) => {
+            const map = new Map(prev.map((c) => [c.id, c]))
+            const oldCar = map.get(baseCar.id) || baseCar
+            map.set(baseCar.id, {
+              ...oldCar,
+              ...raw,
+              id: baseCar.id,
+              driverId: typeof raw.driverId === 'string' ? raw.driverId : null,
+              driverName: typeof raw.driverName === 'string' ? raw.driverName : null,
+            })
+            return DEFAULT_CARS.map((c) => map.get(c.id) || c)
           })
-        })
+        },
+        (err) => setFirebaseError(toErr('Cars listener', err))
+      )
+    })
 
-        setCars(Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id)))
-      },
-      (err) => setFirebaseError(toErr('Cars listener', err))
-    )
-
-    return () => unsub()
+    return () => {
+      for (const unsub of unsubs) unsub()
+    }
   }, [roomId])
 
   useEffect(() => {
@@ -321,7 +363,11 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
     const playerRef = doc(db, 'rooms', roomId, 'players', clientId)
 
     const clean = () => {
-      void deleteDoc(playerRef).catch(() => {})
+      void deleteDoc(playerRef)
+        .catch(() => {})
+        .finally(() => {
+          void maybeDeleteRoomIfEmpty(roomId, true)
+        })
     }
 
     window.addEventListener('beforeunload', clean)
@@ -332,7 +378,7 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   }, [clientId, roomId])
 
   const tryEnterCar = async (carId: string) => {
-    if (quotaBlockedRef.current) return false
+    if (quotaBlockedRef.current) return true
     try {
       const carRef = doc(db, 'rooms', roomId, 'cars', carId)
       return runTransaction(db, async (tx) => {
@@ -361,7 +407,7 @@ export function useFirebaseMultiplayer(localState: NetPlayerState, roomId: strin
   }
 
   const leaveCar = async (carId: string, patch?: Partial<NetCarState>) => {
-    if (quotaBlockedRef.current) return false
+    if (quotaBlockedRef.current) return true
     try {
       const carRef = doc(db, 'rooms', roomId, 'cars', carId)
       return runTransaction(db, async (tx) => {

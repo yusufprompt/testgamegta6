@@ -6,9 +6,9 @@ import Overlay from './ui/Overlay'
 import MobileControls from './ui/MobileControls'
 import { useFirebaseMultiplayer } from './multiplayer/useFirebaseMultiplayer'
 
-function normalizeRoomCode(input: string) {
+function normalizeRoomCode(input: string, fallback = '') {
   const cleaned = input.toUpperCase().replace(/[^A-Z0-9]/g, '')
-  return cleaned.slice(0, 8) || 'ROOM1'
+  return cleaned.slice(0, 8) || fallback
 }
 
 function randomRoomCode() {
@@ -30,7 +30,7 @@ export default function App() {
   const [roomCode, setRoomCode] = useState(() => {
     const hash = window.location.hash
     const fromHash = hash.startsWith('#room=') ? hash.slice(6) : ''
-    return normalizeRoomCode(fromHash)
+    return normalizeRoomCode(fromHash, 'ROOM1')
   })
   const { remotePlayers, cars, tryEnterCar, leaveCar, pushCarState, chatMessages, sendChatMessage, firebaseError } =
     useFirebaseMultiplayer(
@@ -89,7 +89,7 @@ export default function App() {
         carState={carState}
         roomCode={roomCode}
         remoteCount={remotePlayers.length}
-        onJoinRoom={(nextCode) => setRoomCode(normalizeRoomCode(nextCode))}
+        onJoinRoom={(nextCode) => setRoomCode(normalizeRoomCode(nextCode, roomCode))}
         onCreateRoom={() => setRoomCode(randomRoomCode())}
         playerName={playerName}
         onChangePlayerName={(nextName) => setPlayerName(nextName.slice(0, 16))}

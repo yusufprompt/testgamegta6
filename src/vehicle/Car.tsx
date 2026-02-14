@@ -50,6 +50,8 @@ export default function Car({
 }: Props) {
   const ref = useRef<Group | null>(null)
   const { camera } = useThree()
+  const remoteTargetPos = useRef(new Vector3(6, 0.75, -6))
+  const remoteTargetYaw = useRef(0)
   const keys = useRef<KeyMap>({})
   const [gear, setGear] = useState(1)
   const [headlightsOn, setHeadlightsOn] = useState(true)
@@ -92,9 +94,8 @@ export default function Car({
 
   useEffect(() => {
     if (mode !== 'remote' || !ref.current || !remoteState) return
-    ref.current.position.set(remoteState.x, remoteState.y ?? 0.75, remoteState.z)
-    yaw.current = remoteState.yaw
-    ref.current.rotation.set(0, yaw.current, 0)
+    remoteTargetPos.current.set(remoteState.x, remoteState.y ?? 0.75, remoteState.z)
+    remoteTargetYaw.current = remoteState.yaw
     speed.current = 0
   }, [mode, remoteState])
 
@@ -102,8 +103,11 @@ export default function Car({
     if (!ref.current) return
     if (mode === 'remote') {
       if (!remoteState) return
-      ref.current.position.set(remoteState.x, remoteState.y ?? 0.75, remoteState.z)
-      yaw.current = remoteState.yaw
+      remoteTargetPos.current.set(remoteState.x, remoteState.y ?? 0.75, remoteState.z)
+      remoteTargetYaw.current = remoteState.yaw
+      ref.current.position.lerp(remoteTargetPos.current, 0.25)
+      const diff = ((remoteTargetYaw.current - yaw.current + Math.PI * 3) % (Math.PI * 2)) - Math.PI
+      yaw.current += diff * 0.22
       ref.current.rotation.set(0, yaw.current, 0)
       return
     }
